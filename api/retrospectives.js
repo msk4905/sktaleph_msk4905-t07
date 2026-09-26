@@ -7,6 +7,7 @@ import {
   preflight, ok, fail, methodNotAllowed, handle,
   newId, isDateString, requireText, readBody, ValidationError,
 } from '../lib/db.js';
+import { requireAuth } from '../lib/auth.js';
 
 const STATUSES = ['SUCCESS', 'PARTIAL', 'FAIL'];
 
@@ -14,11 +15,12 @@ export default async function handler(req, res) {
   if (preflight(req, res)) return;
 
   return await handle(res, async () => {
+    const userId = await requireAuth(req);
     switch (req.method) {
-      case 'GET':  return await getRetros(req, res);
-      case 'POST':   return await createRetro(req, res);
-      case 'PATCH':  return await updateRetro(req, res);
-      case 'DELETE': return await deleteRetro(req, res);
+      case 'GET':    return await getRetros(req, res, userId);
+      case 'POST':   return await createRetro(req, res, userId);
+      case 'PATCH':  return await updateRetro(req, res, userId);
+      case 'DELETE': return await deleteRetro(req, res, userId);
       default:       return methodNotAllowed(res, ['GET', 'POST', 'PATCH', 'DELETE']);
     }
   });
@@ -27,9 +29,16 @@ export default async function handler(req, res) {
 // ------------------------------------------------------------
 // GET
 // ------------------------------------------------------------
-async function getRetros(req, res) {
+async function getRetros(req, res, userId) {
   const planId = req.query.planId;
   if (!planId) throw new ValidationError('planId 가 필요합니다.');
+
+  const { rows: plan } = await sql`
+    SELECT id FROM plans WHERE id = ${planId} AND user_id = ${userId}
+  `;
+  if (plan.length === 0) {
+    return fail(res, 404, 'PLAN_NOT_FOUND', '그 계획을 찾을 수 없습니다.');
+  }
 
   const { rows } = await sql`
     SELECT * FROM retrospectives
@@ -42,12 +51,12 @@ async function getRetros(req, res) {
 // ------------------------------------------------------------
 // POST — 생성
 // ------------------------------------------------------------
-async function createRetro(req, res) {
+async function createRetro(req, res, userId) {
   const body = readBody(req);
 
   const planId = requireText(body.planId, '계획 id', 100);
   const { rows: plan } = await sql`
-    SELECT id FROM plans WHERE id = ${planId} AND deleted_at IS NULL
+    SELECT id FROM plans WHERE id = ${planId} AND user_id = ${userId} AND deleted_at IS NULL
   `;
   if (plan.length === 0) {
     return fail(res, 404, 'PLAN_NOT_FOUND', '그 계획을 찾을 수 없습니다.');
@@ -62,7 +71,6 @@ async function createRetro(req, res) {
     throw new ValidationError('달성 평가는 SUCCESS, PARTIAL, FAIL 중 하나여야 합니다.');
   }
 
-  // 다음 계획으로 넘길 고칠 점은 필수. (T06-C33 — 이 값이 있어야 다음 계획으로 넘길 수 있다)
   const nextActionItem = requireText(body.nextActionItem, '다음 계획으로 넘길 고칠 점', 500);
 
   const reflectionRaw = body.reflection;
@@ -81,16 +89,16 @@ async function createRetro(req, res) {
   return ok(res, { retrospective: mapRetroRow(rows[0]) }, 201);
 }
 
-
 // ------------------------------------------------------------
 // PATCH — 수정
 // ------------------------------------------------------------
-async function updateRetro(req, res) {
+async function updateRetro(req, res, userId) {
   const id = requireText(req.query.id, '돌아보기 id', 100);
   const body = readBody(req);
 
   const { rows: existing } = await sql`
-    SELECT * FROM retrospectives WHERE id = ${id}
+    SELECT * FROM retrospectives
+    WHERE id = ${id} AND plan_id IN (SELECT id FROM plans WHERE user_id = ${userId})
   `;
   if (existing.length === 0) {
     return fail(res, 404, 'RETRO_NOT_FOUND', '돌아보기를 찾을 수 없습니다.');
@@ -130,12 +138,12 @@ async function updateRetro(req, res) {
 // ------------------------------------------------------------
 // DELETE — 삭제
 // ------------------------------------------------------------
-async function deleteRetro(req, res) {
+async function deleteRetro(req, res, userId) {
   const id = requireText(req.query.id, '돌아보기 id', 100);
 
   const { rows } = await sql`
     DELETE FROM retrospectives
-    WHERE id = ${id}
+    WHERE id = ${id} AND plan_id IN (SELECT id FROM plans WHERE user_id = ${userId})
     RETURNING id
   `;
 

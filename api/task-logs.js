@@ -2,25 +2,29 @@
 //   GET  /api/task-logs?taskId=      그 할 일의 실행 기록 목록
 //   POST /api/task-logs              실행 기록 생성 (idempotencyKey 필수)
 //
-// 중복 방지(T06-C21, T06-C22): idempotency_key 에 UNIQUE 제약이 걸려 있어
-// 같은 키로 두 번 INSERT 하면 두 번째는 DB가 거부한다. 프론트에서 버튼을 잠그는
-// 방식에 의존하지 않는다. 여기서는 그 UNIQUE 위반을 잡아 "중복" 응답으로 바꿔 준다.
+// 소유권: task_logs 는 직접 user_id 를 갖지 않는다. task_id → plan_id → user_id
+// 경로로 소유 여부를 서브쿼리로 확인한다.
+//
+// 중복 방지: idempotency_key 에 UNIQUE 제약이 걸려 있어 같은 키로 두 번 INSERT 하면
+// 두 번째는 DB가 거부한다. 여기서는 그 UNIQUE 위반을 잡아 "중복" 응답으로 바꿔 준다.
 
 import { sql } from '@vercel/postgres';
 import {
   preflight, ok, fail, methodNotAllowed, handle,
   newId, isTimestampString, requireNonNegativeNumber, readBody, ValidationError,
 } from '../lib/db.js';
+import { requireAuth } from '../lib/auth.js';
 
 export default async function handler(req, res) {
   if (preflight(req, res)) return;
 
   return await handle(res, async () => {
+    const userId = await requireAuth(req);
     switch (req.method) {
-      case 'GET':    return await getLogs(req, res);
-      case 'POST':   return await createLog(req, res);
-      case 'PATCH':  return await updateLog(req, res);
-      case 'DELETE': return await deleteLog(req, res);
+      case 'GET':    return await getLogs(req, res, userId);
+      case 'POST':   return await createLog(req, res, userId);
+      case 'PATCH':  return await updateLog(req, res, userId);
+      case 'DELETE': return await deleteLog(req, res, userId);
       default:       return methodNotAllowed(res, ['GET', 'POST', 'PATCH', 'DELETE']);
     }
   });
@@ -29,9 +33,17 @@ export default async function handler(req, res) {
 // ------------------------------------------------------------
 // GET
 // ------------------------------------------------------------
-async function getLogs(req, res) {
+async function getLogs(req, res, userId) {
   const taskId = req.query.taskId;
   if (!taskId) throw new ValidationError('taskId 가 필요합니다.');
+
+  const { rows: task } = await sql`
+    SELECT id FROM tasks
+    WHERE id = ${taskId} AND plan_id IN (SELECT id FROM plans WHERE user_id = ${userId})
+  `;
+  if (task.length === 0) {
+    return fail(res, 404, 'TASK_NOT_FOUND', '그 할 일을 찾을 수 없습니다.');
+  }
 
   const { rows } = await sql`
     SELECT * FROM task_logs
@@ -44,19 +56,19 @@ async function getLogs(req, res) {
 // ------------------------------------------------------------
 // POST — 생성
 // ------------------------------------------------------------
-async function createLog(req, res) {
+async function createLog(req, res, userId) {
   const body = readBody(req);
   const f = validateLogFields(body);
 
   const { rows: task } = await sql`
-    SELECT id FROM tasks WHERE id = ${f.taskId} AND deleted_at IS NULL
+    SELECT id FROM tasks
+    WHERE id = ${f.taskId} AND deleted_at IS NULL
+      AND plan_id IN (SELECT id FROM plans WHERE user_id = ${userId})
   `;
   if (task.length === 0) {
     return fail(res, 404, 'TASK_NOT_FOUND', '그 할 일을 찾을 수 없습니다.');
   }
 
-  // 같은 키가 이미 있으면 새로 쓰지 않고 기존 기록을 그대로 돌려준다.
-  // (버튼을 연달아 두 번 눌러도 기록은 한 건만 남는다 — T06-C21)
   const { rows: existing } = await sql`
     SELECT * FROM task_logs WHERE idempotency_key = ${f.idempotencyKey}
   `;
@@ -71,7 +83,6 @@ async function createLog(req, res) {
       VALUES (${id}, ${f.taskId}, ${f.content}, ${f.startedAt}, ${f.endedAt}, ${f.actualHours}, ${f.blockerReason}, ${f.idempotencyKey})
     `;
   } catch (err) {
-    // 동시에 두 요청이 들어와 여기서 경합했을 때도 UNIQUE 제약이 최종 방어선이 된다.
     if (isUniqueViolation(err)) {
       const { rows: again } = await sql`
         SELECT * FROM task_logs WHERE idempotency_key = ${f.idempotencyKey}
@@ -86,23 +97,26 @@ async function createLog(req, res) {
 }
 
 function isUniqueViolation(err) {
-  // Postgres 의 unique_violation 코드
   return err && err.code === '23505';
 }
 
 // ------------------------------------------------------------
 // PATCH — 수정
-//   idempotency_key 는 건드리지 않는다. 중복 방지는 생성 시점만의 역할이고,
-//   기록을 나중에 고치는 것은 완전히 별개의 정상 동작이다.
 // ------------------------------------------------------------
-async function updateLog(req, res) {
+async function updateLog(req, res, userId) {
   const id = req.query.id;
   if (!id) throw new ValidationError('수정할 실행 기록의 id 가 필요합니다.');
 
   const body = readBody(req);
   const f = validateLogFields(body, { requireTaskId: false });
 
-  const { rows: current } = await sql`SELECT * FROM task_logs WHERE id = ${id}`;
+  const { rows: current } = await sql`
+    SELECT * FROM task_logs
+    WHERE id = ${id}
+      AND task_id IN (
+        SELECT id FROM tasks WHERE plan_id IN (SELECT id FROM plans WHERE user_id = ${userId})
+      )
+  `;
   if (current.length === 0) {
     return fail(res, 404, 'LOG_NOT_FOUND', '그 실행 기록을 찾을 수 없습니다.');
   }
@@ -124,11 +138,17 @@ async function updateLog(req, res) {
 // ------------------------------------------------------------
 // DELETE — 삭제
 // ------------------------------------------------------------
-async function deleteLog(req, res) {
+async function deleteLog(req, res, userId) {
   const id = req.query.id;
   if (!id) throw new ValidationError('삭제할 실행 기록의 id 가 필요합니다.');
 
-  const { rowCount } = await sql`DELETE FROM task_logs WHERE id = ${id}`;
+  const { rowCount } = await sql`
+    DELETE FROM task_logs
+    WHERE id = ${id}
+      AND task_id IN (
+        SELECT id FROM tasks WHERE plan_id IN (SELECT id FROM plans WHERE user_id = ${userId})
+      )
+  `;
   if (rowCount === 0) {
     return fail(res, 404, 'LOG_NOT_FOUND', '그 실행 기록을 찾을 수 없거나 이미 지워졌습니다.');
   }
@@ -144,7 +164,6 @@ function validateLogFields(body, opts = {}) {
     throw new ValidationError('taskId 가 필요합니다.');
   }
 
-  // 실제로 한 일 내용 — 자유 설명, 선택 입력.
   const contentRaw = body.content;
   const content =
     typeof contentRaw === 'string' && contentRaw.trim() !== ''
@@ -161,8 +180,6 @@ function validateLogFields(body, opts = {}) {
     throw new ValidationError('끝난 시각은 시작 시각보다 앞설 수 없습니다.');
   }
 
-  // "실제로 한 일" 기록이므로 아직 일어나지 않은 미래 시각은 넣을 수 없다.
-  // 클라이언트 기기 시계가 서버보다 조금 빠를 수 있어 5분의 여유를 둔다.
   const CLOCK_SKEW_MS = 5 * 60 * 1000;
   const nowWithSkew = Date.now() + CLOCK_SKEW_MS;
   if (new Date(body.startedAt).getTime() > nowWithSkew) {
@@ -181,7 +198,6 @@ function validateLogFields(body, opts = {}) {
 
   let idempotencyKey = body.idempotencyKey;
   if (typeof idempotencyKey !== 'string' || idempotencyKey.trim() === '') {
-    // 클라이언트가 키를 빼먹은 경우를 대비한 안전망. 정상 흐름에서는 프론트가 항상 채워 보낸다.
     idempotencyKey = newId('auto-key');
   }
 

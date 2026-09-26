@@ -1,33 +1,54 @@
-// api/export.js — 내 자료 전체를 파일 하나로 내보내기 (T06-C36)
+// api/export.js — 내 자료 전체를 파일 하나로 내보내기
 //   GET /api/export
 //
 // 화면의 "데이터 백업" 버튼이 이 응답을 그대로 .json 파일로 저장한다.
-// soft delete 된 행도 포함해 전체 상태를 그대로 내보낸다 (진짜 백업이 되도록).
+// soft delete 된 행도 포함해 전체 상태를 그대로 내보내지만, 항상 로그인한
+// 사용자 본인의 자료로만 한정한다.
 
 import { sql } from '@vercel/postgres';
 import { preflight, ok, methodNotAllowed, handle } from '../lib/db.js';
+import { requireAuth } from '../lib/auth.js';
 
 export default async function handler(req, res) {
   if (preflight(req, res)) return;
 
   return await handle(res, async () => {
     if (req.method !== 'GET') return methodNotAllowed(res, ['GET']);
-    return await exportAll(res);
+    const userId = await requireAuth(req);
+    return await exportAll(res, userId);
   });
 }
 
-async function exportAll(res) {
+async function exportAll(res, userId) {
   const [plans, planHistory, tasks, taskLogs, retrospectives] = await Promise.all([
-    sql`SELECT * FROM plans ORDER BY created_at ASC`,
-    sql`SELECT * FROM plan_history ORDER BY plan_id ASC, recorded_at ASC`,
-    sql`SELECT * FROM tasks ORDER BY created_at ASC`,
-    sql`SELECT * FROM task_logs ORDER BY created_at ASC`,
-    sql`SELECT * FROM retrospectives ORDER BY created_at ASC`,
+    sql`SELECT * FROM plans WHERE user_id = ${userId} ORDER BY created_at ASC`,
+    sql`
+      SELECT * FROM plan_history
+      WHERE plan_id IN (SELECT id FROM plans WHERE user_id = ${userId})
+      ORDER BY plan_id ASC, recorded_at ASC
+    `,
+    sql`
+      SELECT * FROM tasks
+      WHERE plan_id IN (SELECT id FROM plans WHERE user_id = ${userId})
+      ORDER BY created_at ASC
+    `,
+    sql`
+      SELECT * FROM task_logs
+      WHERE task_id IN (
+        SELECT id FROM tasks WHERE plan_id IN (SELECT id FROM plans WHERE user_id = ${userId})
+      )
+      ORDER BY created_at ASC
+    `,
+    sql`
+      SELECT * FROM retrospectives
+      WHERE plan_id IN (SELECT id FROM plans WHERE user_id = ${userId})
+      ORDER BY created_at ASC
+    `,
   ]);
 
   return ok(res, {
     exportedAt: new Date().toISOString(),
-    schemaVersion: '2.0.0',
+    schemaVersion: '3.0.0',
     plans: plans.rows.map(mapPlan),
     planHistory: planHistory.rows.map(mapPlanHistory),
     tasks: tasks.rows.map(mapTask),

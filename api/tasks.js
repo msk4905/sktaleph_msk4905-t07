@@ -5,14 +5,15 @@
 //   PATCH  /api/tasks?id=                                       수정 / 완료 / 되돌리기
 //   DELETE /api/tasks?id=                                       삭제 (soft delete)
 //
-// 정렬(T06-C20): 화면에 밝혀 둔 기준대로 정렬한다. 값이 같을 때의 순서까지 고정하려고
+// 모든 조회는 로그인한 사용자가 소유한 계획에 딸린 할 일로만 한정한다.
+// 소유권 확인은 plan_id IN (SELECT id FROM plans WHERE user_id = ...) 서브쿼리로 한다.
+//
+// 정렬: 화면에 밝혀 둔 기준대로 정렬한다. 값이 같을 때의 순서까지 고정하려고
 // 모든 정렬에 created_at DESC, id ASC 를 마지막 결정자로 덧붙인다.
-// 그래서 같은 조건으로 다시 불러도 순서가 달라지지 않는다.
 //
 // 동적 SQL 주의: @vercel/postgres 의 sql 태그드 템플릿은 sql 조각을 중첩할 수 없다.
-// 정렬·조인처럼 구조가 바뀌는 부분은 sql.query(text, params) 로 조립하고,
-// 사용자 입력은 전부 $n 파라미터로만 넣는다. ORDER BY 에 들어가는 문자열은
-// 아래 SORT_OPTIONS 허용 목록에서만 나오므로 외부 입력이 SQL 에 직접 닿지 않는다.
+// 정렬·거르기처럼 구조가 바뀌는 부분은 sql.query(text, params) 로 조립하고,
+// 사용자 입력은 전부 $n 파라미터로만 넣는다.
 
 import { sql } from '@vercel/postgres';
 import {
@@ -20,8 +21,8 @@ import {
   newId, isDateString, isPriority, requireText, requireNonNegativeNumber,
   normalizeTags, readBody, seoulToday, ValidationError,
 } from '../lib/db.js';
+import { requireAuth } from '../lib/auth.js';
 
-// 화면에 그대로 표시하는 정렬 기준 정의. 키는 프론트가 보내는 sort 값과 같다.
 export const SORT_OPTIONS = {
   created_desc:   { label: '만든 날짜 최신순',           expr: 't.created_at DESC' },
   created_asc:    { label: '만든 날짜 오래된순',         expr: 't.created_at ASC' },
@@ -35,7 +36,6 @@ export const SORT_OPTIONS = {
 
 const DEFAULT_SORT = 'created_desc';
 
-// 할 일별 실행 기록 요약(건수·실제 시간 합계·막힘 여부). 사용자 입력이 없는 고정 SQL.
 const LOG_SUMMARY = `(
   SELECT task_id,
          COUNT(*)          AS log_count,
@@ -54,24 +54,28 @@ const TASK_SELECT = `
   LEFT JOIN ${LOG_SUMMARY} l ON l.task_id = t.id
 `;
 
+/** 로그인한 사용자가 소유한 계획에 딸린 할 일인지 거르는 조건 조각. */
+const OWNED_CLAUSE = 't.plan_id IN (SELECT id FROM plans WHERE user_id = ';
+
 export default async function handler(req, res) {
   if (preflight(req, res)) return;
 
   return await handle(res, async () => {
+    const userId = await requireAuth(req);
     switch (req.method) {
-      case 'GET':    return await getTasks(req, res);
-      case 'POST':   return await createTask(req, res);
-      case 'PATCH':  return await updateTask(req, res);
-      case 'DELETE': return await deleteTask(req, res);
+      case 'GET':    return await getTasks(req, res, userId);
+      case 'POST':   return await createTask(req, res, userId);
+      case 'PATCH':  return await updateTask(req, res, userId);
+      case 'DELETE': return await deleteTask(req, res, userId);
       default:       return methodNotAllowed(res, ['GET', 'POST', 'PATCH', 'DELETE']);
     }
   });
 }
 
 // ------------------------------------------------------------
-// GET — 검색 · 거르기 · 정렬 (모두 서버에서 처리한다)
+// GET — 검색 · 거르기 · 정렬
 // ------------------------------------------------------------
-async function getTasks(req, res) {
+async function getTasks(req, res, userId) {
   const { id, planId, q, status, priority, tag, ids } = req.query;
   const sortKey = SORT_OPTIONS[req.query.sort] ? req.query.sort : DEFAULT_SORT;
   const sortExpr = SORT_OPTIONS[sortKey].expr;
@@ -80,8 +84,8 @@ async function getTasks(req, res) {
   // 단건 조회
   if (id) {
     const { rows } = await sql.query(
-      `${TASK_SELECT} WHERE t.id = $1 AND t.deleted_at IS NULL`,
-      [id]
+      `${TASK_SELECT} WHERE t.id = $1 AND t.deleted_at IS NULL AND ${OWNED_CLAUSE}$2)`,
+      [id, userId]
     );
     if (rows.length === 0) {
       return fail(res, 404, 'TASK_NOT_FOUND', '그 할 일을 찾을 수 없습니다.');
@@ -89,7 +93,7 @@ async function getTasks(req, res) {
     return ok(res, { task: mapTaskRow(rows[0], today) });
   }
 
-  // 집계 숫자에서 넘어온 id 목록으로 조회 (T06-C83 드릴다운)
+  // 집계 숫자에서 넘어온 id 목록으로 조회 (드릴다운)
   if (ids) {
     const idList = String(ids).split(',').map((s) => s.trim()).filter(Boolean).slice(0, 500);
     if (idList.length === 0) {
@@ -97,9 +101,9 @@ async function getTasks(req, res) {
     }
     const { rows } = await sql.query(
       `${TASK_SELECT}
-       WHERE t.id = ANY($1) AND t.deleted_at IS NULL
+       WHERE t.id = ANY($1) AND t.deleted_at IS NULL AND ${OWNED_CLAUSE}$2)
        ORDER BY ${sortExpr}, t.created_at DESC, t.id ASC`,
-      [idList]
+      [idList, userId]
     );
     return ok(res, {
       tasks: rows.map((r) => mapTaskRow(r, today)),
@@ -110,16 +114,16 @@ async function getTasks(req, res) {
   }
 
   // 목록 조회 — 조건을 배열로 모아 AND 로 잇는다. 값은 전부 $n 파라미터.
-  const where = ['t.deleted_at IS NULL'];
   const params = [];
   const p = (v) => { params.push(v); return `$${params.length}`; };
+
+  const where = ['t.deleted_at IS NULL', `${OWNED_CLAUSE}${p(userId)})`];
 
   if (planId) where.push(`t.plan_id = ${p(planId)}`);
 
   const searchTerm = typeof q === 'string' && q.trim() !== '' ? q.trim() : null;
   if (searchTerm) {
     const ph = p(`%${searchTerm}%`);
-    // 내용과 태그 양쪽에서 찾는다. (T06-C18)
     where.push(`(t.content ILIKE ${ph} OR EXISTS (SELECT 1 FROM unnest(t.tags) tg WHERE tg ILIKE ${ph}))`);
   }
 
@@ -129,7 +133,6 @@ async function getTasks(req, res) {
   const tagFilter = typeof tag === 'string' && tag.trim() !== '' ? tag.trim() : null;
   if (tagFilter) where.push(`${p(tagFilter)} = ANY(t.tags)`);
 
-  // 거르기 (T06-C19)
   const statusFilter = ['todo', 'done', 'delayed', 'blocked'].includes(status) ? status : null;
   if (statusFilter === 'todo')    where.push('t.is_completed = false');
   if (statusFilter === 'done')    where.push('t.is_completed = true');
@@ -162,14 +165,14 @@ async function getTasks(req, res) {
 }
 
 // ------------------------------------------------------------
-// POST — 생성 (T06-C09)
+// POST — 생성
 // ------------------------------------------------------------
-async function createTask(req, res) {
+async function createTask(req, res, userId) {
   const body = readBody(req);
   const planId = requireText(body.planId, '계획 id', 100);
 
   const { rows: plan } = await sql`
-    SELECT id FROM plans WHERE id = ${planId} AND deleted_at IS NULL
+    SELECT id FROM plans WHERE id = ${planId} AND user_id = ${userId} AND deleted_at IS NULL
   `;
   if (plan.length === 0) {
     return fail(res, 404, 'PLAN_NOT_FOUND', '그 계획을 찾을 수 없습니다. 먼저 계획을 만들어 주세요.');
@@ -189,9 +192,9 @@ async function createTask(req, res) {
 }
 
 // ------------------------------------------------------------
-// PATCH — 수정(T06-C10) / 완료(T06-C11) / 되돌리기(T06-C12)
+// PATCH — 수정 / 완료 / 되돌리기
 // ------------------------------------------------------------
-async function updateTask(req, res) {
+async function updateTask(req, res, userId) {
   const id = req.query.id;
   if (!id) throw new ValidationError('수정할 할 일의 id 가 필요합니다.');
 
@@ -199,15 +202,15 @@ async function updateTask(req, res) {
   const action = body.action;
 
   const { rows: current } = await sql`
-    SELECT * FROM tasks WHERE id = ${id} AND deleted_at IS NULL
+    SELECT * FROM tasks
+    WHERE id = ${id} AND deleted_at IS NULL
+      AND plan_id IN (SELECT id FROM plans WHERE user_id = ${userId})
   `;
   if (current.length === 0) {
     return fail(res, 404, 'TASK_NOT_FOUND', '그 할 일을 찾을 수 없습니다.');
   }
 
   if (action === 'complete') {
-    // 이미 완료면 다시 쓰지 않는다 — 연달아 눌러도 완료 시각이 바뀌지 않는다.
-    // 실행 기록의 중복 방지는 task-logs 의 idempotency_key(UNIQUE)가 담당한다.
     if (current[0].is_completed) {
       return ok(res, { task: mapTaskRow(current[0], seoulToday()), alreadyCompleted: true });
     }
@@ -239,15 +242,16 @@ async function updateTask(req, res) {
 }
 
 // ------------------------------------------------------------
-// DELETE — soft delete (T06-C13)
+// DELETE — soft delete
 // ------------------------------------------------------------
-async function deleteTask(req, res) {
+async function deleteTask(req, res, userId) {
   const id = req.query.id;
   if (!id) throw new ValidationError('삭제할 할 일의 id 가 필요합니다.');
 
   const { rowCount } = await sql`
     UPDATE tasks SET deleted_at = now(), updated_at = now()
     WHERE id = ${id} AND deleted_at IS NULL
+      AND plan_id IN (SELECT id FROM plans WHERE user_id = ${userId})
   `;
   if (rowCount === 0) {
     return fail(res, 404, 'TASK_NOT_FOUND', '그 할 일을 찾을 수 없거나 이미 지워졌습니다.');
@@ -286,7 +290,6 @@ function mapTaskRow(r, today) {
     estimatedHours: Number(r.estimated_hours),
     isCompleted: r.is_completed,
     completedAt: r.completed_at,
-    // 지연 여부는 저장하지 않고 조회 시점의 서울 기준 오늘로 판정한다. (T06-C30)
     isDelayed: !r.is_completed && dueDate != null && dueDate < today,
     logCount: r.log_count != null ? Number(r.log_count) : 0,
     actualHours: r.actual_sum != null ? Number(r.actual_sum) : 0,
@@ -296,7 +299,6 @@ function mapTaskRow(r, today) {
   };
 }
 
-/** DATE 컬럼은 드라이버가 Date 객체로 줄 수 있다. 시간대 변환 없이 YYYY-MM-DD 로 되돌린다. */
 function toDateString(v) {
   if (v == null) return null;
   if (typeof v === 'string') return v.slice(0, 10);

@@ -1,25 +1,30 @@
 // api/plans.js — 계획(Plan)
-//   GET    /api/plans                 계획 목록
-//   GET    /api/plans?id=&history=1   그 계획의 수정 이력 (T06-C08)
-//   POST   /api/plans                 계획 생성 (fromRetrospectiveId 로 고칠 점 이어받기, T06-C33)
+//   GET    /api/plans                 내 계획 목록
+//   GET    /api/plans?id=&history=1   그 계획의 수정 이력
+//   POST   /api/plans                 계획 생성 (fromRetrospectiveId 로 고칠 점 이어받기)
 //   PATCH  /api/plans?id=             계획 수정 — 수정 전 값을 plan_history 에 남긴다
 //   DELETE /api/plans?id=             계획 삭제 (soft delete)
+//
+// 모든 조회·수정·삭제는 로그인한 사용자 소유의 행으로 한정한다.
+// 다른 사용자의 id를 넣어도 WHERE 절의 user_id 조건에서 걸러져 404로 응답한다.
 
 import {
   sql, preflight, ok, fail, methodNotAllowed, handle,
   newId, isDateString, isPriority, requireText, requireNonNegativeNumber,
   readBody, ValidationError,
 } from '../lib/db.js';
+import { requireAuth } from '../lib/auth.js';
 
 export default async function handler(req, res) {
   if (preflight(req, res)) return;
 
   return await handle(res, async () => {
+    const userId = await requireAuth(req);
     switch (req.method) {
-      case 'GET':    return await getPlans(req, res);
-      case 'POST':   return await createPlan(req, res);
-      case 'PATCH':  return await updatePlan(req, res);
-      case 'DELETE': return await deletePlan(req, res);
+      case 'GET':    return await getPlans(req, res, userId);
+      case 'POST':   return await createPlan(req, res, userId);
+      case 'PATCH':  return await updatePlan(req, res, userId);
+      case 'DELETE': return await deletePlan(req, res, userId);
       default:       return methodNotAllowed(res, ['GET', 'POST', 'PATCH', 'DELETE']);
     }
   });
@@ -28,11 +33,17 @@ export default async function handler(req, res) {
 // ------------------------------------------------------------
 // GET
 // ------------------------------------------------------------
-async function getPlans(req, res) {
+async function getPlans(req, res, userId) {
   const { id, history } = req.query;
 
-  // 수정 이력 조회
+  // 수정 이력 조회 — 이력도 그 계획이 내 것일 때만 보인다.
   if (id && history) {
+    const { rows: owned } = await sql`
+      SELECT id FROM plans WHERE id = ${id} AND user_id = ${userId}
+    `;
+    if (owned.length === 0) {
+      return fail(res, 404, 'PLAN_NOT_FOUND', '그 계획을 찾을 수 없습니다.');
+    }
     const { rows } = await sql`
       SELECT history_id, plan_id, title, start_date, end_date, priority,
              success_criteria, estimated_hours, valid_from, recorded_at
@@ -46,7 +57,7 @@ async function getPlans(req, res) {
   // 단건 조회
   if (id) {
     const { rows } = await sql`
-      SELECT * FROM plans WHERE id = ${id} AND deleted_at IS NULL
+      SELECT * FROM plans WHERE id = ${id} AND user_id = ${userId} AND deleted_at IS NULL
     `;
     if (rows.length === 0) {
       return fail(res, 404, 'PLAN_NOT_FOUND', '그 계획을 찾을 수 없습니다.');
@@ -70,7 +81,7 @@ async function getPlans(req, res) {
       GROUP BY plan_id
     ) t ON t.plan_id = p.id
     LEFT JOIN retrospectives r ON r.carried_to_plan_id = p.id
-    WHERE p.deleted_at IS NULL
+    WHERE p.user_id = ${userId} AND p.deleted_at IS NULL
     ORDER BY p.created_at DESC
   `;
 
@@ -87,27 +98,29 @@ async function getPlans(req, res) {
 // ------------------------------------------------------------
 // POST — 생성
 // ------------------------------------------------------------
-async function createPlan(req, res) {
+async function createPlan(req, res, userId) {
   const body = readBody(req);
   const fields = validatePlanFields(body);
   const id = newId('plan');
 
   await sql`
-    INSERT INTO plans (id, title, content, start_date, end_date, priority, success_criteria, estimated_hours)
-    VALUES (${id}, ${fields.title}, ${fields.content}, ${fields.startDate}, ${fields.endDate},
+    INSERT INTO plans (id, user_id, title, content, start_date, end_date, priority, success_criteria, estimated_hours)
+    VALUES (${id}, ${userId}, ${fields.title}, ${fields.content}, ${fields.startDate}, ${fields.endDate},
             ${fields.priority}, ${fields.successCriteria}, ${fields.estimatedHours})
   `;
 
-  // 돌아보기의 고칠 점을 이어받아 만든 계획이면, 그 회고에 연결을 남긴다. (T06-C33)
+  // 돌아보기의 고칠 점을 이어받아 만든 계획이면, 그 회고에 연결을 남긴다.
+  // 이어받는 회고도 내 소유일 때만 인정한다.
   const fromRetroId = body.fromRetrospectiveId;
   if (typeof fromRetroId === 'string' && fromRetroId.trim() !== '') {
     const { rowCount } = await sql`
       UPDATE retrospectives
       SET carried_to_plan_id = ${id}, updated_at = now()
-      WHERE id = ${fromRetroId} AND carried_to_plan_id IS NULL
+      WHERE id = ${fromRetroId}
+        AND carried_to_plan_id IS NULL
+        AND plan_id IN (SELECT id FROM plans WHERE user_id = ${userId})
     `;
     if (rowCount === 0) {
-      // 회고가 없거나 이미 넘겨진 경우 — 계획 생성 자체는 유효하므로 경고만 실어 보낸다.
       const { rows } = await sql`SELECT * FROM plans WHERE id = ${id}`;
       return ok(res, {
         plan: mapPlanRow(rows[0]),
@@ -123,23 +136,21 @@ async function createPlan(req, res) {
 // ------------------------------------------------------------
 // PATCH — 수정 (수정 전 값을 이력으로 보존)
 // ------------------------------------------------------------
-async function updatePlan(req, res) {
+async function updatePlan(req, res, userId) {
   const id = req.query.id;
   if (!id) throw new ValidationError('수정할 계획의 id 가 필요합니다.');
 
   const body = readBody(req);
   const fields = validatePlanFields(body);
 
-  // 현재 값을 먼저 읽는다.
   const { rows: current } = await sql`
-    SELECT * FROM plans WHERE id = ${id} AND deleted_at IS NULL
+    SELECT * FROM plans WHERE id = ${id} AND user_id = ${userId} AND deleted_at IS NULL
   `;
   if (current.length === 0) {
     return fail(res, 404, 'PLAN_NOT_FOUND', '그 계획을 찾을 수 없습니다.');
   }
   const before = current[0];
 
-  // 1) 수정 "전" 값을 이력으로 복사한다. 계획 ID 는 그대로 두고 내용만 바뀐다.
   await sql`
     INSERT INTO plan_history
       (plan_id, title, content, start_date, end_date, priority, success_criteria, estimated_hours, valid_from)
@@ -148,7 +159,6 @@ async function updatePlan(req, res) {
        ${before.priority}, ${before.success_criteria}, ${before.estimated_hours}, ${before.updated_at})
   `;
 
-  // 2) 그 다음에 현재 값을 갱신한다.
   await sql`
     UPDATE plans
     SET title = ${fields.title},
@@ -159,7 +169,7 @@ async function updatePlan(req, res) {
         success_criteria = ${fields.successCriteria},
         estimated_hours = ${fields.estimatedHours},
         updated_at = now()
-    WHERE id = ${id}
+    WHERE id = ${id} AND user_id = ${userId}
   `;
 
   const { rows } = await sql`SELECT * FROM plans WHERE id = ${id}`;
@@ -176,19 +186,18 @@ async function updatePlan(req, res) {
 // ------------------------------------------------------------
 // DELETE — soft delete
 // ------------------------------------------------------------
-async function deletePlan(req, res) {
+async function deletePlan(req, res, userId) {
   const id = req.query.id;
   if (!id) throw new ValidationError('삭제할 계획의 id 가 필요합니다.');
 
   const { rowCount } = await sql`
     UPDATE plans SET deleted_at = now(), updated_at = now()
-    WHERE id = ${id} AND deleted_at IS NULL
+    WHERE id = ${id} AND user_id = ${userId} AND deleted_at IS NULL
   `;
   if (rowCount === 0) {
     return fail(res, 404, 'PLAN_NOT_FOUND', '그 계획을 찾을 수 없거나 이미 지워졌습니다.');
   }
 
-  // 계획을 지우면 딸린 할 일도 함께 지운 것으로 본다.
   await sql`
     UPDATE tasks SET deleted_at = now(), updated_at = now()
     WHERE plan_id = ${id} AND deleted_at IS NULL
@@ -203,7 +212,6 @@ async function deletePlan(req, res) {
 function validatePlanFields(body) {
   const title = requireText(body.title, '계획 제목', 200);
 
-  // 계획 내용 — 자유 설명, 성공 기준과는 별개. 선택 입력이라 비어 있으면 NULL.
   const contentRaw = body.content;
   const content =
     typeof contentRaw === 'string' && contentRaw.trim() !== ''
@@ -257,10 +265,8 @@ function mapHistoryRow(r) {
   };
 }
 
-/** DATE 컬럼은 드라이버가 Date 객체로 줄 수 있다. 시간대 변환 없이 YYYY-MM-DD 로 되돌린다. */
 function toDateString(v) {
   if (v == null) return null;
   if (typeof v === 'string') return v.slice(0, 10);
-  // Date 객체는 UTC 자정으로 들어오므로 UTC 기준으로 잘라야 하루가 밀리지 않는다.
   return new Date(v).toISOString().slice(0, 10);
 }

@@ -1,44 +1,33 @@
 // api/summary.js — 돌아보기 집계
 //   GET /api/summary?planId=
-//
-// 응답 형식(contracts/pds-schema-v2.json 의 aggregationRules 와 1:1 대응):
-//   {
-//     planId, today,
-//     counts: {
-//       plan:      { value, taskIds },  // 딸린, 지우지 않은 할 일 수 (T06-C28)
-//       completed: { value, taskIds },  // 그중 완료 상태 (T06-C29)
-//       delayed:   { value, taskIds },  // 미완료 + 마감일 < 오늘(서울) (T06-C30)
-//       blocked:   { value, taskIds },  // 막힌 이유가 있는 실행기록을 가진 할 일 (T06-C31)
-//     },
-//     hours: { estimated, actual, diff }  // T06-C32, 대상이 없으면 전부 0
-//   }
-// 집계 숫자를 눌렀을 때 그 숫자가 나온 기록으로 갈 수 있도록(T06-C83)
-// 각 counts 항목에 taskIds 를 함께 내려준다.
 
 import { sql } from '@vercel/postgres';
 import { preflight, ok, fail, methodNotAllowed, handle, seoulToday, ValidationError } from '../lib/db.js';
+import { requireAuth } from '../lib/auth.js';
 
 export default async function handler(req, res) {
   if (preflight(req, res)) return;
 
   return await handle(res, async () => {
     if (req.method !== 'GET') return methodNotAllowed(res, ['GET']);
-    return await getSummary(req, res);
+    const userId = await requireAuth(req);
+    return await getSummary(req, res, userId);
   });
 }
 
-async function getSummary(req, res) {
+async function getSummary(req, res, userId) {
   const planId = req.query.planId;
   if (!planId) throw new ValidationError('planId 가 필요합니다.');
 
-  const { rows: plan } = await sql`SELECT id FROM plans WHERE id = ${planId} AND deleted_at IS NULL`;
+  const { rows: plan } = await sql`
+    SELECT id FROM plans WHERE id = ${planId} AND user_id = ${userId} AND deleted_at IS NULL
+  `;
   if (plan.length === 0) {
     return fail(res, 404, 'PLAN_NOT_FOUND', '그 계획을 찾을 수 없습니다.');
   }
 
   const today = seoulToday();
 
-  // 계획에 딸린, 지우지 않은 할 일 전체 + 막힘 여부 + 실제 시간 합계를 한 번에 가져온다.
   const { rows } = await sql`
     SELECT
       t.id,
