@@ -274,6 +274,20 @@
 
   .hidden{display:none !important}
 
+  /* ---------- 로그인 / 가입 ---------- */
+  .auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+  .auth-card{
+    background:var(--surface);border-radius:16px;padding:32px 28px;max-width:380px;width:100%;
+    box-shadow:0 20px 48px -14px rgba(27,26,21,.26), 0 4px 14px -6px rgba(31,109,76,.12);
+    border-top:3px solid var(--accent);
+  }
+  .auth-card h1{font-size:1.35rem;margin-bottom:4px}
+  .auth-card .msub{font-size:.82rem;color:var(--ink-soft);margin-bottom:20px}
+  .auth-switch{font-size:.83rem;color:var(--ink-soft);margin-top:16px;text-align:center}
+  .auth-switch a{color:var(--accent);cursor:pointer;text-decoration:underline}
+  .user-badge{display:flex;align-items:center;gap:10px;font-size:.82rem;color:var(--ink-soft);flex-wrap:wrap}
+  .user-badge b{color:var(--ink)}
+
   @media(max-width:640px){
     .shell{padding:20px 16px 48px}
     .task-head{flex-direction:column}
@@ -282,7 +296,38 @@
 </style>
 </head>
 <body>
-<div class="shell">
+
+<!-- ========== 로그인 / 가입 화면 (첫 화면) ========== -->
+<div class="auth-wrap" id="auth-screen">
+  <div class="auth-card">
+    <h1>Plan · Do · See</h1>
+    <div class="msub" id="auth-sub">로그인하면 내 계획과 기록을 볼 수 있습니다.</div>
+    <div id="auth-err"></div>
+
+    <form id="login-form" onsubmit="submitLogin(event)">
+      <div class="fg"><label>아이디</label><input type="text" id="login-username" required maxlength="60" autocomplete="username"></div>
+      <div class="fg"><label>비밀번호</label><input type="password" id="login-password" required maxlength="200" autocomplete="current-password"></div>
+      <div class="modal-acts" style="justify-content:stretch">
+        <button type="submit" class="btn" style="width:100%">로그인</button>
+      </div>
+    </form>
+
+    <form id="signup-form" class="hidden" onsubmit="submitSignup(event)">
+      <div class="fg"><label>아이디 (영문 소문자·숫자·_.- 3자 이상)</label><input type="text" id="signup-username" required maxlength="60" autocomplete="username"></div>
+      <div class="fg"><label>비밀번호 (8자 이상)</label><input type="password" id="signup-password" required minlength="8" maxlength="200" autocomplete="new-password"></div>
+      <div class="modal-acts" style="justify-content:stretch">
+        <button type="submit" class="btn" style="width:100%">가입하기</button>
+      </div>
+    </form>
+
+    <div class="auth-switch">
+      <span id="to-signup">아직 계정이 없나요? <a onclick="toggleAuthMode('signup')">가입하기</a></span>
+      <span id="to-login" class="hidden">이미 계정이 있나요? <a onclick="toggleAuthMode('login')">로그인</a></span>
+    </div>
+  </div>
+</div>
+
+<div class="shell hidden" id="app-shell">
 
   <div class="hero">
   <div class="topline">
@@ -302,10 +347,11 @@
     </button>
   </div>
 
-  <p class="notice">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v5M12 16h.01"/></svg>
-    <span>지금은 로그인이 없어 링크를 아는 사람은 누구나 볼 수 있습니다. 남이 봐도 괜찮은 내용만 넣으세요.</span>
-  </p>
+  <div class="user-badge">
+    <span>로그인: <b id="user-username">-</b></span>
+    <button class="btn-text" onclick="handleLogout()">로그아웃</button>
+    <button class="btn-text" onclick="handleDeleteAccount()">계정 삭제</button>
+  </div>
   </div>
 
   <div id="global-err"></div>
@@ -581,6 +627,7 @@ const state = {
 async function api(path, options = {}){
   const res = await fetch(path, {
     headers:{'Content-Type':'application/json'},
+    credentials:'same-origin',
     ...options,
   });
   let data = null;
@@ -591,9 +638,98 @@ async function api(path, options = {}){
     const err = new Error(msg);
     err.code = data?.error?.code;
     err.status = res.status;
+    // 세션이 없거나 끊긴 상태로 자료 API를 불렀을 때는 로그인 화면으로 되돌린다.
+    // 로그인·가입 요청 자체의 401(아이디/비밀번호 오류)은 이 화면 전환 대상이 아니다.
+    if(res.status === 401 && !path.startsWith('/api/auth')){
+      showAuthScreen('세션이 만료되었거나 로그인이 필요합니다. 다시 로그인해 주세요.');
+    }
     throw err;
   }
   return data;
+}
+
+/* ---------- 인증 ---------- */
+function toggleAuthMode(mode){
+  const isSignup = mode === 'signup';
+  document.getElementById('login-form').classList.toggle('hidden', isSignup);
+  document.getElementById('signup-form').classList.toggle('hidden', !isSignup);
+  document.getElementById('to-signup').classList.toggle('hidden', isSignup);
+  document.getElementById('to-login').classList.toggle('hidden', !isSignup);
+  showErr('auth-err', '');
+}
+
+function showAuthScreen(message){
+  document.getElementById('app-shell').classList.add('hidden');
+  document.getElementById('auth-screen').classList.remove('hidden');
+  if(message) showErr('auth-err', message);
+}
+
+function showApp(username){
+  document.getElementById('auth-screen').classList.add('hidden');
+  document.getElementById('app-shell').classList.remove('hidden');
+  document.getElementById('user-username').textContent = username;
+}
+
+async function checkAuth(){
+  try{
+    const data = await api('/api/me');
+    showApp(data.user.username);
+    loadPlans();
+  }catch{
+    showAuthScreen();
+  }
+}
+
+async function submitLogin(ev){
+  ev.preventDefault();
+  showErr('auth-err', '');
+  const username = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+  try{
+    const data = await api('/api/auth?action=login', {
+      method:'POST', body: JSON.stringify({ username, password }),
+    });
+    document.getElementById('login-password').value = '';
+    showApp(data.user.username);
+    loadPlans();
+  }catch(e){
+    showErr('auth-err', e.message);
+  }
+}
+
+async function submitSignup(ev){
+  ev.preventDefault();
+  showErr('auth-err', '');
+  const username = document.getElementById('signup-username').value.trim();
+  const password = document.getElementById('signup-password').value;
+  try{
+    const data = await api('/api/auth?action=signup', {
+      method:'POST', body: JSON.stringify({ username, password }),
+    });
+    document.getElementById('signup-password').value = '';
+    showApp(data.user.username);
+    loadPlans();
+  }catch(e){
+    showErr('auth-err', e.message);
+  }
+}
+
+async function handleLogout(){
+  try{ await api('/api/auth?action=logout', { method:'POST' }); }catch{ /* 쿠키가 이미 없어도 무방 */ }
+  toggleAuthMode('login');
+  showAuthScreen();
+}
+
+async function handleDeleteAccount(){
+  if(!confirm('계정을 삭제하면 내 계획·할 일·기록이 모두 함께 지워집니다. 되돌릴 수 없습니다. 계속할까요?')) return;
+  try{
+    await api('/api/account', { method:'DELETE' });
+    toast('계정과 자료를 모두 지웠습니다.');
+    toggleAuthMode('login');
+    showAuthScreen();
+  }catch(e){
+    toast(`계정 삭제에 실패했습니다. ${e.message}`, true);
+  }
 }
 
 function toast(msg, bad=false){
@@ -1460,7 +1596,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  loadPlans();
+  checkAuth();
 });
 </script>
 </body>
