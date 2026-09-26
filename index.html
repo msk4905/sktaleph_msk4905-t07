@@ -640,7 +640,7 @@ async function api(path, options = {}){
     err.status = res.status;
     // 세션이 없거나 끊긴 상태로 자료 API를 불렀을 때는 로그인 화면으로 되돌린다.
     // 로그인·가입 요청 자체의 401(아이디/비밀번호 오류)은 이 화면 전환 대상이 아니다.
-    if(res.status === 401 && !path.startsWith('/api/auth')){
+    if(res.status === 401 && !path.startsWith('/api/auth') && path !== '/api/me'){
       showAuthScreen('세션이 만료되었거나 로그인이 필요합니다. 다시 로그인해 주세요.');
     }
     throw err;
