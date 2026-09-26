@@ -673,8 +673,12 @@ function showApp(username){
 async function checkAuth(){
   try{
     const data = await api('/api/me');
-    showApp(data.user.username);
-    loadPlans();
+    if(data.user){
+      showApp(data.user.username);
+      loadPlans();
+    }else{
+      showAuthScreen();
+    }
   }catch{
     showAuthScreen();
   }
