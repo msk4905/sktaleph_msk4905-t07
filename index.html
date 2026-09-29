@@ -10,7 +10,6 @@
 <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
 <style>
   :root{
-    /* ---- 최종 확정: 차분한 톤 + 딥 에메랄드 포인트 ---- */
     --paper:#faf9f5; --surface:#ffffff; --surface-2:#f2efe7;
     --ink:#1b1a15; --ink-soft:#6a6656; --ink-faint:#a49e8b;
     --line:#e7e2d3; --line-strong:#d6cfb9;
@@ -108,11 +107,21 @@
   .btn-line{background:var(--surface);color:var(--ink);border-color:var(--line-strong);padding:7px 14px;font-size:.82rem;border-radius:8px}
   .btn-line:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-tint)}
 
-  .btn-sm{background:none;color:var(--ink-soft);border:none;padding:4px 9px;font-size:.78rem;border-radius:6px}
+  /* 조작 버튼: 눌러도 되는 것이 한눈에 보이도록 블록 형태로 만든다. 일반 / 완료 / 삭제 세 종류. */
+  .btn-sm,.btn-ok-sm,.btn-danger-sm{
+    display:inline-flex;align-items:center;justify-content:center;gap:4px;
+    min-height:34px;padding:6px 12px;font-size:.8rem;font-weight:600;line-height:1.2;white-space:nowrap;
+    border-radius:8px;border:none;background:rgba(27,26,21,.06);color:var(--ink-soft);
+    transition:background .14s,color .14s,transform .1s;
+    -webkit-tap-highlight-color:transparent;
+  }
   .btn-sm:hover{color:var(--accent);background:var(--accent-tint)}
-
-  .btn-danger-sm{background:none;color:var(--ink-faint);border:none;padding:4px 9px;font-size:.78rem;border-radius:6px}
-  .btn-danger-sm:hover{color:var(--bad);background:var(--bad-tint)}
+  .btn-ok-sm{background:var(--accent-tint);color:var(--accent-ink)}
+  .btn-ok-sm:hover{background:var(--accent);color:#fff}
+  .btn-danger-sm{color:var(--bad);margin-left:6px}
+  .btn-danger-sm:hover,.btn-danger-sm:active{background:var(--bad);color:#fff}
+  .btn-sm:active,.btn-ok-sm:active,.btn-danger-sm:active{transform:scale(.97)}
+  .btn-sm:focus-visible,.btn-ok-sm:focus-visible,.btn-danger-sm:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
   /* ---------- 폼 ---------- */
   label{display:block;font-size:.79rem;font-weight:600;color:var(--ink-soft);margin-bottom:5px}
@@ -144,7 +153,7 @@
   .plan-header .criteria{font-size:.85rem;color:var(--ink);margin-top:14px;padding:12px 15px;background:var(--surface-2);
     border-left:2px solid var(--gold);border-radius:0 8px 8px 0}
   .plan-header .criteria b{font-weight:700;color:var(--gold);font-size:.71rem;display:block;margin-bottom:3px;letter-spacing:.02em}
-  .plan-header-acts{display:flex;gap:2px;flex-shrink:0}
+  .plan-header-acts{display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap}
 
   .plan-meta-row{display:flex;flex-wrap:wrap;gap:16px;margin-top:16px;font-size:.79rem;color:var(--ink-soft);font-family:var(--font-mono)}
   .plan-meta-row b{color:var(--ink);font-weight:600}
@@ -203,7 +212,7 @@
   }
   .check.on{background:var(--good);border-color:var(--good)}
   .task-meta{font-size:.76rem;color:var(--ink-soft);display:flex;flex-wrap:wrap;gap:3px 14px;margin-top:8px;margin-left:25px;align-items:center;font-family:var(--font-mono)}
-  .task-acts{display:flex;gap:2px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
+  .task-acts{display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
 
   .logs{margin-top:9px;margin-left:25px}
   .log{font-size:.79rem;color:var(--ink-soft);padding:9px 0;border-top:1px dotted var(--line-strong)}
@@ -238,9 +247,8 @@
     margin-top:9px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;
     font-size:.82rem;color:var(--good);
   }
-  .retro-actions{display:flex;gap:2px;align-items:center;flex-shrink:0}
-  .retro-actions .btn-sm{padding:3px 8px}
-  .retro-actions .btn-danger-sm{padding:3px 8px}
+  .retro-actions{display:flex;gap:6px;align-items:center;flex-shrink:0}
+  .retro-actions .btn-sm,.retro-actions .btn-danger-sm{min-height:30px;padding:4px 10px}
 
   /* ---------- 모달 ---------- */
   .modal-bg{
@@ -293,6 +301,122 @@
     .task-head{flex-direction:column}
     .task-acts{justify-content:flex-start;margin-left:23px}
   }
+  /* ---------- 모바일: 계획 목록 드로어와 화면 재정비 ---------- */
+  .mbar, .drawer-backdrop, .drawer-close{display:none}
+  .rail-head-acts{display:flex;align-items:center;gap:4px}
+
+  @media (max-width:860px){
+    .shell{padding:0 14px 40px}
+    .hero{margin:0 -14px;padding:14px 14px 6px}
+    .topline{align-items:center;gap:10px;margin-bottom:4px}
+    .topline h1{font-size:1.2rem}
+    .brand{gap:8px}
+    .brand svg{width:22px;height:22px}
+    .topline > .btn-line{padding:7px 11px;font-size:.76rem}
+    .user-badge{gap:8px;font-size:.78rem;padding-bottom:6px}
+
+    /* 상단 고정 막대: 계획 목록을 여는 버튼과 현재 계획 이름 */
+    .mbar{
+      display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:30;
+      margin:0 -14px 14px;padding:9px 14px;
+      background:rgba(250,249,245,.95);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+      border-bottom:1px solid var(--line);
+    }
+    .mbar-btn{
+      flex-shrink:0;display:inline-flex;align-items:center;gap:7px;
+      background:var(--surface);border:1px solid var(--line-strong);
+      padding:9px 13px;font-size:.84rem;border-radius:9px;
+    }
+    .mbar-title{
+      flex:1;min-width:0;font-size:.92rem;font-weight:600;color:var(--ink);
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    }
+
+    /* 계획 목록은 왼쪽에서 밀려 나오는 서랍으로 */
+    .app{display:block}
+    aside{
+      position:fixed;top:0;left:0;bottom:0;width:min(84vw,330px);z-index:40;
+      background:var(--surface);padding:16px 14px 28px;overflow-y:auto;
+      transform:translateX(-104%);transition:transform .22s ease;
+    }
+    body.drawer-open aside{transform:translateX(0);box-shadow:8px 0 30px -10px rgba(27,26,21,.38)}
+    .drawer-backdrop{
+      display:block;position:fixed;inset:0;background:rgba(33,31,27,.42);z-index:39;
+      opacity:0;pointer-events:none;transition:opacity .2s;
+    }
+    body.drawer-open .drawer-backdrop{opacity:1;pointer-events:auto}
+    body.drawer-open{overflow:hidden}
+    .drawer-close{display:inline-flex}
+    .rail-head{margin-bottom:14px}
+    .rail-list{flex-direction:column;overflow:visible;gap:5px;padding-bottom:0}
+    .rail-item{width:100%;white-space:normal;flex-shrink:1;padding:12px;
+      border-bottom:none;border-left:3px solid transparent}
+    .rail-item.active{border-left-color:var(--accent);border-bottom-color:transparent}
+    .rail-item .t{-webkit-line-clamp:2}
+
+    /* 계획 상세 */
+    #plan-header{padding:16px;margin-bottom:16px;border-radius:12px}
+    .plan-header h2{font-size:1.15rem}
+    .plan-header-acts{width:100%;justify-content:flex-end;margin-top:-4px}
+    .plan-meta-row{gap:6px 14px;margin-top:12px}
+    .progress-row{max-width:none}
+
+    /* 탭과 도구줄 */
+    .tabs{gap:22px;margin-bottom:16px}
+    .tab-btn{padding:11px 2px 13px}
+    .panel-head{flex-wrap:nowrap;align-items:stretch}
+    .panel-head .search-wrap{flex:1 1 0 !important;min-width:0 !important;max-width:none !important}
+    .panel-head .btn-line{flex-shrink:0;padding:8px 12px}
+    .toolbar{grid-template-columns:1fr 1fr}
+    .toolbar > div:empty{display:none}
+    #f-sort{grid-column:1/-1}
+
+    /* 누르기 쉬운 크기, 입력 시 자동 확대 방지 */
+    input,select,textarea{font-size:16px;padding:10px 12px}
+    .btn-sm,.btn-ok-sm,.btn-danger-sm{min-height:40px;padding:8px 13px;font-size:.82rem}
+    .retro-actions .btn-sm,.retro-actions .btn-danger-sm{min-height:38px;padding:6px 12px}
+    .plan-header-acts{justify-content:flex-start}
+    .task-acts{justify-content:flex-start}
+    .btn-text{padding:8px 4px}
+    .task{padding:12px 2px 12px 10px}
+    .task-acts{margin-left:25px}
+    .hours-row{gap:12px 22px}
+    .stat{padding:14px 12px}
+
+    /* 입력창은 아래에서 올라오는 시트로 */
+    .modal-bg{align-items:flex-end;padding:0}
+    .modal{max-width:none;border-radius:16px 16px 0 0;max-height:92vh;padding:20px 16px 26px}
+    .modal-acts .btn,.modal-acts .btn-line{flex:1;padding:11px 14px}
+
+    .auth-wrap{padding:16px}
+    .auth-card{padding:26px 18px}
+    .toast{bottom:16px}
+  }
+  @supports (min-height:100dvh){ .auth-wrap{min-height:100dvh} }
+  /* 실행 기록 열기 버튼: 조작 버튼과 같은 옅은 블록 */
+  .logs-toggle{
+    display:inline-flex;align-items:center;gap:7px;min-height:32px;padding:5px 12px;
+    font-size:.78rem;font-weight:600;line-height:1.2;border:none;border-radius:8px;
+    background:rgba(27,26,21,.06);color:var(--ink-soft);
+    transition:background .14s,color .14s,transform .1s;-webkit-tap-highlight-color:transparent;
+  }
+  .logs-toggle:hover{background:var(--accent-tint);color:var(--accent)}
+  .logs-toggle:active{transform:scale(.97)}
+  .logs-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .logs-toggle .chev{display:inline-block;font-size:.68rem;transition:transform .16s}
+  .logs-toggle[aria-expanded="true"] .chev{transform:rotate(90deg)}
+  #task-list [id^="logs-"]{margin-top:6px}
+  @media (max-width:860px){ .logs-toggle{min-height:38px;padding:7px 14px;font-size:.8rem} }
+
+  /* 카드형: 할 일 한 건을 하나의 블록으로 묶는다 */
+  .task-list{border-top:none;display:flex;flex-direction:column;gap:10px}
+  .task{
+    background:var(--surface);border:none;border-left:3px solid transparent;border-radius:12px;
+    padding:14px;box-shadow:0 1px 3px -1px rgba(27,26,21,.10);
+    transition:box-shadow .16s;
+  }
+  .task:hover{background:var(--surface);box-shadow:0 4px 12px -5px rgba(27,26,21,.18)}
+  @media (max-width:860px){ .task-list{gap:8px} .task{padding:12px} }
 </style>
 </head>
 <body>
@@ -349,19 +473,31 @@
 
   <div class="user-badge">
     <span>로그인: <b id="user-username">-</b></span>
-    <button class="btn-text" onclick="handleLogout()">로그아웃</button>
-    <button class="btn-text" onclick="handleDeleteAccount()">계정 삭제</button>
+    <button class="btn-sm" onclick="handleLogout()">로그아웃</button>
+    <button class="btn-danger-sm" onclick="handleDeleteAccount()">계정 삭제</button>
   </div>
   </div>
+
+  <div class="mbar">
+    <button class="mbar-btn" id="mbar-btn" onclick="toggleDrawer()" aria-controls="plan-drawer" aria-expanded="false">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      계획
+    </button>
+    <div class="mbar-title" id="mbar-title">계획을 선택하세요</div>
+  </div>
+  <div class="drawer-backdrop" id="drawer-backdrop" onclick="closeDrawer()"></div>
 
   <div id="global-err"></div>
 
   <div class="app">
     <!-- ========== 왼쪽 레일: 계획 목록 ========== -->
-    <aside>
+    <aside id="plan-drawer">
       <div class="rail-head">
         <span class="label">계획</span>
-        <button class="btn-text" onclick="openPlanModal()">+ 새 계획</button>
+        <span class="rail-head-acts">
+          <button class="btn-line" onclick="closeDrawer();openPlanModal()">+ 새 계획</button>
+          <button class="btn-sm drawer-close" onclick="closeDrawer()" aria-label="계획 목록 닫기">닫기</button>
+        </span>
       </div>
       <div class="rail-list" id="plan-list"><div class="loading">불러오는 중…</div></div>
     </aside>
@@ -736,6 +872,23 @@ async function handleDeleteAccount(){
   }
 }
 
+/* ---------- 모바일 계획 목록 서랍 ---------- */
+function setDrawer(open){
+  document.body.classList.toggle('drawer-open', open);
+  const b = document.getElementById('mbar-btn');
+  if(b) b.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+function openDrawer(){ setDrawer(true); }
+function closeDrawer(){ setDrawer(false); }
+function toggleDrawer(){ setDrawer(!document.body.classList.contains('drawer-open')); }
+
+function syncMobileTitle(){
+  const el = document.getElementById('mbar-title');
+  if(!el) return;
+  const plan = state.plans.find(p => p.id === state.currentPlanId);
+  el.textContent = plan ? plan.title : '계획을 선택하세요';
+}
+
 function toast(msg, bad=false){
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -807,6 +960,7 @@ function renderPlans(){
   const el = document.getElementById('plan-list');
   if(state.plans.length === 0){
     el.innerHTML = '<div class="rail-empty">아직 계획이 없습니다.<br>지금 실제로 하고 있는 일 하나를 옮겨 보세요.</div>';
+    syncMobileTitle();
     return;
   }
 
@@ -816,6 +970,7 @@ function renderPlans(){
       <div class="m">${esc(p.startDate)} ~ ${esc(p.endDate)} · 할 일 ${Number(p.taskCount)}개</div>
     </button>
   `).join('');
+  syncMobileTitle();
 }
 
 /* 오른쪽 상단 — 선택된 계획의 상세 정보와 조작 버튼. */
@@ -856,6 +1011,7 @@ function selectPlan(id){
   state.drillIds = null;
   state.expandedLogs.clear();
   renderPlans();
+  closeDrawer();
 
   const plan = state.plans.find(p => p.id === id);
   renderPlanHeader(plan);
@@ -1079,15 +1235,15 @@ function renderTasks(){
           <button class="btn-sm" onclick="openLogModal('${esc(t.id)}')">+ 실행 기록</button>
           ${t.isCompleted
             ? `<button class="btn-sm" onclick="toggleTask('${esc(t.id)}','reopen')">되돌리기</button>`
-            : `<button class="btn-sm" onclick="toggleTask('${esc(t.id)}','complete')">완료</button>`}
+            : `<button class="btn-ok-sm" onclick="toggleTask('${esc(t.id)}','complete')">완료</button>`}
           <button class="btn-sm" onclick="openTaskModal('${esc(t.id)}')">수정</button>
           <button class="btn-danger-sm" onclick="deleteTask('${esc(t.id)}')">삭제</button>
         </div>
       </div>
       ${t.logCount > 0 ? `
         <div class="logs">
-          <button class="btn-text" style="padding:0" onclick="toggleLogs('${esc(t.id)}')">
-            ${expanded ? '▾' : '▸'} 실행 기록 ${Number(t.logCount)}건
+          <button class="logs-toggle" aria-expanded="${expanded ? 'true' : 'false'}" aria-controls="logs-${esc(t.id)}" onclick="toggleLogs('${esc(t.id)}')">
+            <span class="chev" aria-hidden="true">▸</span>실행 기록 ${Number(t.logCount)}건
           </button>
           <div id="logs-${esc(t.id)}">${expanded ? '<div class="loading">불러오는 중…</div>' : ''}</div>
         </div>` : ''}
@@ -1201,7 +1357,7 @@ async function fetchLogs(taskId){
             · 실제 <b>${Number(l.actualHours)}시간</b>
             ${l.blockerReason ? `<span class="log-blk">막힘 — ${esc(l.blockerReason)}</span>` : ''}
           </div>
-          <div style="display:flex;gap:2px;flex-shrink:0">
+          <div style="display:flex;gap:6px;flex-shrink:0">
             <button class="btn-sm" onclick="openLogModal('${esc(l.taskId)}','${esc(l.id)}')">수정</button>
             <button class="btn-danger-sm" onclick="deleteLog('${esc(l.taskId)}','${esc(l.id)}')">삭제</button>
           </div>
@@ -1597,8 +1753,14 @@ window.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('keydown', ev => {
     if(ev.key === 'Escape'){
       document.querySelectorAll('.modal-bg.open').forEach(m => m.classList.remove('open'));
+      closeDrawer();
     }
   });
+
+  // 화면이 넓어지면 서랍 상태를 정리한다.
+  const wide = window.matchMedia('(min-width:861px)');
+  const onWide = e => { if(e.matches) closeDrawer(); };
+  if(wide.addEventListener) wide.addEventListener('change', onWide);
 
   checkAuth();
 });
