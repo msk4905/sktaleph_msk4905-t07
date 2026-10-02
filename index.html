@@ -10,6 +10,7 @@
 <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
 <style>
   :root{
+    /* ---- 최종 확정: 차분한 톤 + 딥 에메랄드 포인트 ---- */
     --paper:#faf9f5; --surface:#ffffff; --surface-2:#f2efe7;
     --ink:#1b1a15; --ink-soft:#6a6656; --ink-faint:#a49e8b;
     --line:#e7e2d3; --line-strong:#d6cfb9;
@@ -854,8 +855,19 @@ async function submitSignup(ev){
   }
 }
 
+/* 로그아웃·계정삭제 뒤 다음 로그인에서 이전 계정의 화면이 남아있지 않도록 비운다. */
+function resetPlanView(){
+  state.currentPlanId = null;
+  state.plans = [];
+  state.expandedLogs.clear();
+  document.getElementById('plan-header').innerHTML = '';
+  document.getElementById('plan-list').innerHTML = '';
+  document.getElementById('panels').classList.add('hidden');
+}
+
 async function handleLogout(){
   try{ await api('/api/auth?action=logout', { method:'POST' }); }catch{ /* 쿠키가 이미 없어도 무방 */ }
+  resetPlanView();
   toggleAuthMode('login');
   showAuthScreen();
 }
@@ -865,6 +877,7 @@ async function handleDeleteAccount(){
   try{
     await api('/api/account', { method:'DELETE' });
     toast('계정과 자료를 모두 지웠습니다.');
+    resetPlanView();
     toggleAuthMode('login');
     showAuthScreen();
   }catch(e){
